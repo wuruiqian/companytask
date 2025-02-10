@@ -1,0 +1,36 @@
+def clean_html(html_content):
+    """清理HTML中的空行和空列"""
+    soup = BeautifulSoup(html_content, "html.parser")
+
+    # 删除所有空行
+    for element in soup.find_all(text=lambda text: text.isspace() or not text.strip()):
+        element.extract()
+
+    # 删除所有只有空格的元素（例如，空列或没有实际内容的td、th等）
+    for tag in soup.find_all(['td', 'th']):
+        if not tag.get_text(strip=True):
+            tag.decompose()  # 删除空的td和th标签
+
+    return str(soup)
+
+def mark_differences(file1, file2, output_file='diff.html'):
+    """对比两个 HTML 文件，并在原 HTML 结构上标注差异，只高亮差异部分"""
+    html1 = read_html(file1)
+    html2 = read_html(file2)
+
+    # 清理 HTML 中的空行和空列
+    html1 = clean_html(html1)
+    html2 = clean_html(html2)
+
+    soup1 = BeautifulSoup(html1, "html.parser")
+    soup2 = BeautifulSoup(html2, "html.parser")
+
+    # 遍历 soup1 的所有标签，寻找相同的标签并对比内容
+    for tag1, tag2 in zip(soup1.find_all(), soup2.find_all()):
+        if tag1.name == tag2.name and tag1.string and tag2.string:  # 只比较带文本的标签
+            if tag1.string.strip() != tag2.string.strip():  # 内容不同
+                diff_html = highlight_text_diff(tag1.string, tag2.string)
+                tag1.string.replace_with(NavigableString(""))  # 清空原字符串
+                tag1.append(BeautifulSoup(diff_html, "html.parser"))  # 插入高亮后的文本
+
+    # 自定义 CSS 样式，突出差异
