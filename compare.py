@@ -27,26 +27,30 @@ def highlight_diff_in_html(file1, file2, output_file='diff.html'):
     differ = difflib.Differ()
     diff = list(differ.compare(text1.splitlines(), text2.splitlines()))
 
-    # 将差异部分添加 CSS 样式进行高亮
-    def mark_diff(diff_list):
-        """给差异部分添加标注"""
-        highlighted_text = []
+    # 记录差异标记的函数
+    def mark_diff_in_html(diff_list, soup):
+        """将差异部分插入原 HTML 结构，使用 span 标签进行高亮"""
+        index = 0
         for line in diff_list:
             if line.startswith('+'):
-                highlighted_text.append(f'<span class="diff_add">{line[2:]}</span>')  # 新增的内容
+                # 高亮新增的内容
+                diff_content = f'<span class="diff_add">{line[2:]}</span>'
+                soup.body.insert(index, diff_content)  # 插入标注
+                index += 1
             elif line.startswith('-'):
-                highlighted_text.append(f'<span class="diff_sub">{line[2:]}</span>')  # 删除的内容
+                # 高亮删除的内容
+                diff_content = f'<span class="diff_sub">{line[2:]}</span>'
+                soup.body.insert(index, diff_content)  # 插入标注
+                index += 1
             elif line.startswith('?'):
                 continue  # 跳过问号行（这些是 diff 的提示行，不需要显示）
             else:
-                highlighted_text.append(line)  # 保留不变的内容
-        return '\n'.join(highlighted_text)
+                # 对没有差异的行保留原样
+                index += 1
+        return soup
 
-    # 标注文本差异
-    marked_diff = mark_diff(diff)
-
-    # 将差异部分插入原 HTML 文件
-    soup1.body.insert(0, marked_diff)
+    # 将差异标记插入到原 HTML 文件
+    soup1 = mark_diff_in_html(diff, soup1)
 
     # 自定义 CSS 样式，突出差异
     styled_content = f"""
@@ -69,9 +73,6 @@ def highlight_diff_in_html(file1, file2, output_file='diff.html'):
                 background-color: #ffb6ba;  /* 红色 - 删除内容 */
                 color: red;
                 text-decoration: line-through;
-            }}
-            span {{
-                font-family: monospace;
             }}
         </style>
     </head>
