@@ -1,77 +1,94 @@
 import difflib
 import bs4
-import re
 
-def read_html_content(filename):
-    """读取HTML文件并提取可见文本"""
+def read_html(filename):
+    """读取 HTML 文件"""
     try:
         with open(filename, 'r', encoding='utf-8') as f:
-            html = f.read()
-        soup = bs4.BeautifulSoup(html, "html.parser")
-        return soup.get_text().splitlines(keepends=True)  # 按行拆分，保持换行
+            return f.read()
     except FileNotFoundError:
         print(f"错误：文件 '{filename}' 未找到")
         exit(1)
 
 def generate_diff_html(file1, file2, output_file='diff.html'):
-    """对比HTML的可见文本内容，并生成更直观的差异报告"""
-    text1 = read_html_content(file1)
-    text2 = read_html_content(file2)
+    """在 HTML 文件中生成差异标注"""
+    html1 = read_html(file1)
+    html2 = read_html(file2)
 
-    differ = difflib.HtmlDiff(tabsize=4, wrapcolumn=80)
-    diff_content = differ.make_file(text1, text2, file1, file2, context=True)
+    # 使用 BeautifulSoup 解析 HTML 文件
+    soup1 = bs4.BeautifulSoup(html1, "html.parser")
+    soup2 = bs4.BeautifulSoup(html2, "html.parser")
+
+    # 获取可见文本内容
+    text1 = soup1.get_text()
+    text2 = soup2.get_text()
+
+    # 使用 difflib 比较文本内容
+    differ = difflib.Differ()
+    diff = list(differ.compare(text1.splitlines(), text2.splitlines()))
+
+    # 定义标注差异的函数
+    def mark_diff(diff_list):
+        """给差异部分添加标注"""
+        highlighted_text = []
+        for line in diff_list:
+            if line.startswith('+'):
+                highlighted_text.append(f'<span class="diff_add">{line[2:]}</span>')  # 新增内容
+            elif line.startswith('-'):
+                highlighted_text.append(f'<span class="diff_sub">{line[2:]}</span>')  # 删除内容
+            elif line.startswith('?'):
+                continue  # 跳过问号行（这些是 diff 的提示行，不需要显示）
+            else:
+                highlighted_text.append(line)  # 保留不变的内容
+        return '\n'.join(highlighted_text)
+
+    # 生成标注后的差异 HTML 内容
+    marked_diff = mark_diff(diff)
+
+    # 将差异内容插入到原 HTML 中
+    soup1.body.insert(0, marked_diff)
 
     # 自定义CSS样式，增强可视化
     styled_content = f"""
     <html>
     <head>
         <meta charset="utf-8">
-        <title>HTML 可视化差异对比</title>
+        <title>HTML 差异标注</title>
         <style>
             body {{
                 font-family: Arial, sans-serif;
                 margin: 20px;
                 background-color: #f5f5f5;
             }}
-            table {{
-                border-collapse: collapse;
-                width: 100%;
-                background-color: white;
-                box-shadow: 0px 0px 10px #ddd;
-            }}
-            th, td {{
-                padding: 8px;
-                border: 1px solid #ddd;
-                font-size: 14px;
-            }}
             .diff_add {{
                 background-color: #d4fcbc;  /* 绿色 - 添加的文本 */
+                color: green;
+                font-weight: bold;
             }}
             .diff_sub {{
                 background-color: #ffb6ba;  /* 红色 - 删除的文本 */
-            }}
-            .diff_chg {{
-                background-color: #ffff99;  /* 黄色 - 修改的文本 */
+                color: red;
+                text-decoration: line-through;
             }}
         </style>
     </head>
     <body>
-        <h2>HTML 可视化差异对比</h2>
-        {diff_content}
+        <h2>HTML 差异标注</h2>
+        {str(soup1)}
     </body>
     </html>
     """
 
-    # 写入HTML文件
+    # 写入输出文件
     with open(output_file, 'w', encoding='utf-8') as f:
         f.write(styled_content)
 
-    print(f"可视化差异报告已生成：{output_file}")
+    print(f"差异标注报告已生成：{output_file}")
 
 if __name__ == "__main__":
     # 直接在代码中指定文件路径
-    file1 = r"C:\path\to\your\file1.html"  # 修改为你的文件路径
-    file2 = r"C:\path\to\your\file2.html"  # 修改为你的文件路径
+    file1 = r"C:\path\to\your\file1.html"  # 替换为你的文件路径
+    file2 = r"C:\path\to\your\file2.html"  # 替换为你的文件路径
     output_file = r"C:\path\to\your\diff.html"  # 输出文件路径
 
     generate_diff_html(file1, file2, output_file)
