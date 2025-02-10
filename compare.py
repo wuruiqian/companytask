@@ -1,5 +1,5 @@
 import difflib
-import bs4
+from bs4 import BeautifulSoup
 
 def read_html(filename):
     """读取 HTML 文件"""
@@ -10,47 +10,37 @@ def read_html(filename):
         print(f"错误：文件 '{filename}' 未找到")
         exit(1)
 
-def highlight_diff_in_html(file1, file2, output_file='diff.html'):
-    """在原 HTML 文件中标注差异部分，保留原 HTML 结构"""
+def highlight_text_diff(old_text, new_text):
+    """对比两个文本内容，返回标注后的 HTML 代码"""
+    differ = difflib.SequenceMatcher(None, old_text, new_text)
+    result = []
+
+    for tag, i1, i2, j1, j2 in differ.get_opcodes():
+        if tag == 'equal':  # 相同部分
+            result.append(old_text[i1:i2])
+        elif tag == 'replace':  # 修改部分
+            result.append(f'<span class="diff_sub">{old_text[i1:i2]}</span>')
+            result.append(f'<span class="diff_add">{new_text[j1:j2]}</span>')
+        elif tag == 'insert':  # 仅在新文件中出现
+            result.append(f'<span class="diff_add">{new_text[j1:j2]}</span>')
+        elif tag == 'delete':  # 仅在旧文件中出现
+            result.append(f'<span class="diff_sub">{old_text[i1:i2]}</span>')
+
+    return ''.join(result)
+
+def mark_differences(file1, file2, output_file='diff.html'):
+    """对比两个 HTML 文件，并在原 HTML 结构上标注差异"""
     html1 = read_html(file1)
     html2 = read_html(file2)
 
-    # 使用 BeautifulSoup 解析 HTML 文件，保留 HTML 结构
-    soup1 = bs4.BeautifulSoup(html1, "html.parser")
-    soup2 = bs4.BeautifulSoup(html2, "html.parser")
+    soup1 = BeautifulSoup(html1, "html.parser")
+    soup2 = BeautifulSoup(html2, "html.parser")
 
-    # 获取原 HTML 文件的文本内容
-    text1 = soup1.get_text()
-    text2 = soup2.get_text()
-
-    # 使用 difflib 进行文本对比
-    differ = difflib.Differ()
-    diff = list(differ.compare(text1.splitlines(), text2.splitlines()))
-
-    # 记录差异标记的函数
-    def mark_diff_in_html(diff_list, soup):
-        """将差异部分插入原 HTML 结构，使用 span 标签进行高亮"""
-        index = 0
-        for line in diff_list:
-            if line.startswith('+'):
-                # 高亮新增的内容
-                diff_content = f'<span class="diff_add">{line[2:]}</span>'
-                soup.body.insert(index, diff_content)  # 插入标注
-                index += 1
-            elif line.startswith('-'):
-                # 高亮删除的内容
-                diff_content = f'<span class="diff_sub">{line[2:]}</span>'
-                soup.body.insert(index, diff_content)  # 插入标注
-                index += 1
-            elif line.startswith('?'):
-                continue  # 跳过问号行（这些是 diff 的提示行，不需要显示）
-            else:
-                # 对没有差异的行保留原样
-                index += 1
-        return soup
-
-    # 将差异标记插入到原 HTML 文件
-    soup1 = mark_diff_in_html(diff, soup1)
+    # 遍历 soup1 的所有标签，寻找相同的标签并对比内容
+    for tag1, tag2 in zip(soup1.find_all(), soup2.find_all()):
+        if tag1.name == tag2.name and tag1.string and tag2.string:  # 只比较带文本的标签
+            if tag1.string.strip() != tag2.string.strip():  # 内容不同
+                tag1.string = BeautifulSoup(highlight_text_diff(tag1.string, tag2.string), "html.parser")
 
     # 自定义 CSS 样式，突出差异
     styled_content = f"""
@@ -62,7 +52,6 @@ def highlight_diff_in_html(file1, file2, output_file='diff.html'):
             body {{
                 font-family: Arial, sans-serif;
                 margin: 20px;
-                background-color: #f5f5f5;
             }}
             .diff_add {{
                 background-color: #d4fcbc;  /* 绿色 - 新增内容 */
@@ -77,7 +66,6 @@ def highlight_diff_in_html(file1, file2, output_file='diff.html'):
         </style>
     </head>
     <body>
-        <h2>HTML 差异标注</h2>
         {str(soup1)}
     </body>
     </html>
@@ -91,8 +79,8 @@ def highlight_diff_in_html(file1, file2, output_file='diff.html'):
 
 if __name__ == "__main__":
     # 直接在代码中指定文件路径
-    file1 = r"C:\path\to\your\file1.html"  # 替换为你的文件路径
-    file2 = r"C:\path\to\your\file2.html"  # 替换为你的文件路径
-    output_file = r"C:\path\to\your\diff.html"  # 输出文件路径
+    file1 = r"C:\path\to\your\file1.html"  # 修改为你的 HTML 文件路径
+    file2 = r"C:\path\to\your\file2.html"  # 修改为你的 HTML 文件路径
+    output_file = r"C:\path\to\your\diff.html"  # 结果文件路径
 
-    highlight_diff_in_html(file1, file2, output_file)
+    mark_differences(file1, file2, output_file)
