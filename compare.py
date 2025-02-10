@@ -1,5 +1,5 @@
 import difflib
-import bs4
+from bs4 import BeautifulSoup, NavigableString
 
 def read_html(filename):
     """读取 HTML 文件"""
@@ -10,49 +10,59 @@ def read_html(filename):
         print(f"错误：文件 '{filename}' 未找到")
         exit(1)
 
-def highlight_diff_in_html(file1, file2, output_file='diff.html'):
-    """在原 HTML 文件中标注差异部分，保留原 HTML 结构"""
+def normalize_text(text):
+    """
+    归一化文本：删除多余空白（包括换行、空行、制表符等），
+    使得 'abc\n   def' 归一化为 'abc def'
+    """
+    return " ".join(text.split())
+
+def highlight_text_diff(old_text, new_text):
+    """
+    对比两个归一化后的文本，返回 file1 部分的文本，
+    对于 file1 中与 file2 不同的部分，用 <span class="diff_sub">包裹。
+    对于 file2 中新增的内容，不显示。
+    """
+    differ = difflib.SequenceMatcher(None, old_text, new_text)
+    result = []
+    for tag, i1, i2, j1, j2 in differ.get_opcodes():
+        if tag == 'equal':
+            result.append(old_text[i1:i2])
+        elif tag in ('replace', 'delete'):
+            # 对于 file1 中有而 file2 中不同或缺失的部分，做高亮处理
+            result.append(f'<span class="diff_sub">{old_text[i1:i2]}</span>')
+        elif tag == 'insert':
+            # file2 中新增的部分，不显示
+            continue
+    return ''.join(result)
+
+def mark_differences(file1, file2, output_file='diff.html'):
+    """
+    对比两个 HTML 文件：
+      - 对于每个标签，如果归一化后的文本不一致，则
+        用 difflib 计算差异，仅在 file1 中对差异部分高亮显示，
+        输出结果仍保持原 HTML 结构
+    """
     html1 = read_html(file1)
     html2 = read_html(file2)
 
-    # 使用 BeautifulSoup 解析 HTML 文件，保留 HTML 结构
-    soup1 = bs4.BeautifulSoup(html1, "html.parser")
-    soup2 = bs4.BeautifulSoup(html2, "html.parser")
+    # 解析 HTML 文件
+    soup1 = BeautifulSoup(html1, "html.parser")
+    soup2 = BeautifulSoup(html2, "html.parser")
 
-    # 获取原 HTML 文件的文本内容
-    text1 = soup1.get_text()
-    text2 = soup2.get_text()
-
-    # 使用 difflib 进行文本对比
-    differ = difflib.Differ()
-    diff = list(differ.compare(text1.splitlines(), text2.splitlines()))
-
-    # 记录差异标记的函数
-    def mark_diff_in_html(diff_list, soup):
-        """将差异部分插入原 HTML 结构，使用 span 标签进行高亮"""
-        index = 0
-        for line in diff_list:
-            if line.startswith('+'):
-                # 高亮新增的内容
-                diff_content = f'<span class="diff_add">{line[2:]}</span>'
-                soup.body.insert(index, diff_content)  # 插入标注
-                index += 1
-            elif line.startswith('-'):
-                # 高亮删除的内容
-                diff_content = f'<span class="diff_sub">{line[2:]}</span>'
-                soup.body.insert(index, diff_content)  # 插入标注
-                index += 1
-            elif line.startswith('?'):
-                continue  # 跳过问号行（这些是 diff 的提示行，不需要显示）
-            else:
-                # 对没有差异的行保留原样
-                index += 1
-        return soup
-
-    # 将差异标记插入到原 HTML 文件
-    soup1 = mark_diff_in_html(diff, soup1)
-
-    # 自定义 CSS 样式，突出差异
+    # 遍历 file1 与 file2 中所有标签（假设两文件标签顺序基本相同）
+    for tag1, tag2 in zip(soup1.find_all(), soup2.find_all()):
+        # 如果两个标签都有文本内容，则进行归一化后对比
+        if tag1.string and tag2.string:
+            norm_text1 = normalize_text(tag1.string)
+            norm_text2 = normalize_text(tag2.string)
+            if norm_text1 != norm_text2:
+                # 计算 file1 的差异高亮（仅显示 file1 文本，但不显示 file2 新增内容）
+                diff_html = highlight_text_diff(norm_text1, norm_text2)
+                # 替换标签中的原文本，注意这里用归一化后的文本替换原文本
+                tag1.string.replace_with(NavigableString(""))
+                tag1.append(BeautifulSoup(diff_html, "html.parser"))
+    # 自定义 CSS 样式
     styled_content = f"""
     <html>
     <head>
@@ -62,37 +72,27 @@ def highlight_diff_in_html(file1, file2, output_file='diff.html'):
             body {{
                 font-family: Arial, sans-serif;
                 margin: 20px;
-                background-color: #f5f5f5;
-            }}
-            .diff_add {{
-                background-color: #d4fcbc;  /* 绿色 - 新增内容 */
-                color: green;
-                font-weight: bold;
             }}
             .diff_sub {{
-                background-color: #ffb6ba;  /* 红色 - 删除内容 */
+                background-color: #ffb6ba;  /* 红色 - 表示 file1 中与 file2 不同的部分 */
                 color: red;
                 text-decoration: line-through;
             }}
         </style>
     </head>
     <body>
-        <h2>HTML 差异标注</h2>
         {str(soup1)}
     </body>
     </html>
     """
 
-    # 写入输出文件
     with open(output_file, 'w', encoding='utf-8') as f:
         f.write(styled_content)
-
     print(f"差异标注报告已生成：{output_file}")
 
 if __name__ == "__main__":
-    # 直接在代码中指定文件路径
-    file1 = r"C:\path\to\your\file1.html"  # 替换为你的文件路径
-    file2 = r"C:\path\to\your\file2.html"  # 替换为你的文件路径
-    output_file = r"C:\path\to\your\diff.html"  # 输出文件路径
-
-    highlight_diff_in_html(file1, file2, output_file)
+    # 修改为你的 HTML 文件路径
+    file1 = r"C:\path\to\your\file1.html"
+    file2 = r"C:\path\to\your\file2.html"
+    output_file = r"C:\path\to\your\diff.html"
+    mark_differences(file1, file2, output_file)
