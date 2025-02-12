@@ -1,11 +1,12 @@
 import difflib
 import os
 from itertools import zip_longest
-from bs4 import BeautifulSoup, NavigableString
+from bs4 import BeautifulSoup
 import pandas as pd
 import matplotlib.pyplot as plt
 from io import BytesIO
 import base64
+
 
 # 读取文件
 def read_html(filename):
@@ -127,29 +128,8 @@ def mark_differences(file1, file2, output_file='diff.html'):
         f.write(styled_content)
     print(f"差异标注报告已生成：{output_file}")
 
-
-# 对比两个文件夹中的文件
-def compare_folders(folder1, folder2, result_folder):
-    files1 = os.listdir(folder1)
-    files2 = os.listdir(folder2)
-    common_files = set(files1) & set(files2)
-
-    if not os.path.exists(result_folder):
-        os.makedirs(result_folder)
-
-    for filename in common_files:
-        file1 = os.path.join(folder1, filename)
-        file2 = os.path.join(folder2, filename)
-
-        basename = os.path.splitext(filename)[0]
-
-        output_file = os.path.join(result_folder, f"comparison_{basename}_result.html")
-        mark_differences(file1, file2, output_file)
-
-
-# 在这里生成总结报告
-def generate_summary_report(result_folder):
-    # 获取生成的所有差异报告
+# 在报告中生成总结
+def generate_summary_report(result_folder, summary_folder):
     result_files = os.listdir(result_folder)
     result_html_files = [f for f in result_files if f.endswith("_result.html")]
 
@@ -158,21 +138,89 @@ def generate_summary_report(result_folder):
         file_path = os.path.join(result_folder, result_file)
         summary_data.append([result_file, f'<a href="{file_path}">查看差异</a>'])
 
-    # 转换为DataFrame
     summary_df = pd.DataFrame(summary_data, columns=["File Name", "Comparison Result"])
 
-    # 将总结报告导出为HTML
+    # 生成报告的HTML文件
     summary_html = summary_df.to_html(escape=False)
-    with open(os.path.join(result_folder, "summary_report.html"), "w", encoding="utf-8") as f:
+    output_summary_path = os.path.join(summary_folder, "summary_report.html")
+    with open(output_summary_path, "w", encoding="utf-8") as f:
         f.write(summary_html)
-    print(f"总结报告已生成：summary_report.html")
+    print(f"总结报告已生成：{output_summary_path}")
 
+# 生成饼图
+def generate_pie_chart_base64(summary_df):
+    status_counts = summary_df['Comparison Result'].value_counts()
+    labels = status_counts.index
+    sizes = status_counts.values
+    total = sum(sizes)
+
+    labels = [f"{label} ({count}, {count/total:.1%})" for label, count in zip(labels, sizes)]
+
+    fig, ax = plt.subplots(figsize=(6, 6))
+    ax.pie(sizes, labels=labels, autopct='%1.1f%%', startangle=140, 
+           colors=['#4CAF50', '#FF9800', '#F44336', '#2196F3'])
+    ax.set_title("Pie Chart of Tables Comparison Result")
+
+    buf = BytesIO()
+    plt.savefig(buf, format="png", bbox_inches="tight")
+    plt.close(fig)
+    buf.seek(0)
+    img_base64 = base64.b64encode(buf.read()).decode('utf-8')
+    return f"data:image/png;base64,{img_base64}"
+
+# 生成总结HTML并嵌入饼图和差异报告链接
+def generate_summary_html(summary_df, result_folder, output_path):
+    pie_chart_img = generate_pie_chart_base64(summary_df)
+
+    summary_table_html = summary_df.to_html(index=False, escape=False, classes="table table-bordered")
+
+    html_content = f"""
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>C3421010 Tables Comparison Summary</title>
+        <style>
+            body {{ font-family: Arial, sans-serif; margin: 20px; }}
+            .table {{ width: 100%; border-collapse: collapse; margin-top: 20px; font-size: 10pt; }}
+            .table th, .table td {{ border: 1px solid #ddd; padding: 8px; text-align: left; }}
+            .table th {{ background-color: #4CAF50; color: white; }}
+            img {{ width: 100%; max-width: 600px; height: auto; }}
+            .download-btn {{ background-color: #4CAF50; color: white; padding: 10px 15px; border: none; 
+                            cursor: pointer; margin-top: 20px; }}
+            .download-btn:hover {{ background-color: #45a049; }}
+        </style>
+    </head>
+    <body>
+        <h2>C3421010 Tables Comparison Summary</h2>
+        
+        <div>
+            <img src="{pie_chart_img}" alt="Pie Chart">
+        </div>
+
+        <div>
+            <h3>Comparison Summary</h3>
+            {summary_table_html}
+            <button class="download-btn" onclick="exportTableToExcel()">Download Excel</button>
+        </div>
+    </body>
+    </html>
+    """
+
+    with open(output_path, "w", encoding="utf-8") as file:
+        file.write(html_content)
+
+    print(f"Summary HTML generated: {output_path}")
 
 # 主程序
 if __name__ == "__main__":
     folder1 = 'CDARS'
     folder2 = 'SIGMA'
     result_folder = 'RESULT_Complex'
+    summary_folder = 'SUMMARY_Complex'
 
     compare_folders(folder1, folder2, result_folder)
-    generate_summary_report(result_folder)
+    generate_summary_report(result_folder, summary_folder)
+    summary_df = pd.read_html(os.path.join(summary_folder, "summary_report.html"))[0]
+    generate_summary_html(summary_df, result_folder, os.path.join(summary_folder, "final_summary_report.html"))
