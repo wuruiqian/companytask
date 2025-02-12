@@ -1,0 +1,178 @@
+import difflib
+import os
+from itertools import zip_longest
+from bs4 import BeautifulSoup, NavigableString
+import pandas as pd
+import matplotlib.pyplot as plt
+from io import BytesIO
+import base64
+
+# 读取文件
+def read_html(filename):
+    try:
+        with open(filename, 'r', encoding='windows-1252') as f:
+            return f.read()
+    except FileNotFoundError:
+        print(f"wrong, can't find '{filename}' ")
+        exit(1)
+
+# 去除空白字符
+def normalize_text(text):
+    return " ".join(text.split())
+
+# 获取标签内所有文本内容
+def get_text(tag):
+    if tag:
+        return normalize_text(tag.get_text())
+    return ""
+
+# 对比文本差异
+def highlight_text_diff(old_text, new_text, other_text=None):
+    differ = difflib.SequenceMatcher(None, old_text, new_text)
+    result = []
+    for tag, i1, i2, j1, j2 in differ.get_opcodes():
+        if tag == 'equal':
+            result.append(old_text[i1:i2])
+        elif tag in ('replace', 'delete'):
+            result.append(f'<span class="diff_sub">{old_text[i1:i2]}</span>')
+        elif tag == 'insert':
+            result.append(f'<span class="diff_add"></span>')
+
+    if other_text:
+        result.append(f'<span class="other_text">{other_text}</span>')
+    return ''.join(result)
+
+# 将 th 转换为 td
+def unify_th_to_td(table):
+    for th in table.find_all("th"):
+        th.name = "td"
+
+# 跳过空行
+def skip_empty_row(row):
+    return not any(td.get_text(strip=True) for td in row.find_all("td"))
+
+# 比较两个 HTML 文件，生成差异标注
+def mark_differences(file1, file2, output_file='diff.html'):
+    html1 = read_html(file1)
+    html2 = read_html(file2)
+
+    soup1 = BeautifulSoup(html1, "html.parser")
+    soup2 = BeautifulSoup(html2, "html.parser")
+    tables1 = soup1.find_all("table")
+    tables2 = soup2.find_all("table")
+
+    for table1, table2 in zip(tables1, tables2):
+        unify_th_to_td(table1)
+        unify_th_to_td(table2)
+        body1 = table1.find("tbody") or table1
+        body2 = table2.find("tbody") or table2
+        rows1 = body1.find_all("tr")
+        rows2 = body2.find_all("tr")
+        rows1 = [row for row in rows1 if not skip_empty_row(row)]
+        rows2 = [row for row in rows2 if not skip_empty_row(row)]
+        max_rows = max(len(rows1), len(rows2))
+        for row1, row2 in zip_longest(rows1, rows2, fillvalue=None):
+            if not row1 or not row2:
+                continue
+
+            cols1 = row1.find_all("td") if row1 else []
+            cols2 = row2.find_all("td") if row2 else []
+
+            max_cols = max(len(cols1), len(cols2))
+            cols1 = cols1 + [None] * (max_cols - len(cols1))
+            cols2 = cols2 + [None] * (max_cols - len(cols2))
+
+            for col1, col2 in zip(cols1, cols2):
+                text1 = get_text(col1) if col1 else ""
+                text2 = get_text(col2) if col2 else ""
+                if text1 != text2:
+                    other_text = get_text(col2) if col2 else ""
+                    diff_html = highlight_text_diff(text1, text2, other_text)
+                    if col1:
+                        col1.clear()
+                        col1.append(BeautifulSoup(diff_html, "html.parser"))
+
+    # 自定义 CSS 样式
+    styled_content = f"""
+    <html>
+    <head>
+        <meta charset="utf-8">
+        <title>HTML 差异标注</title>
+        <style>
+            body {{
+                font-family: Arial, sans-serif;
+                margin: 20px;
+            }}
+            .diff_add {{
+                background-color: #d4fcbc;  /* 绿色 - 新增内容 */
+                color: green;
+                font-weight: bold;
+            }}
+            .diff_sub {{
+                background-color: #ffb6ba;  /* 红色 - 删除内容 */
+                color: red;
+            }}
+            .other_text {{
+                color: blue;
+            }}
+        </style>
+    </head>
+    <body>
+        {str(soup1)}
+    </body>
+    </html>
+    """
+
+    with open(output_file, 'w', encoding='utf-8') as f:
+        f.write(styled_content)
+    print(f"差异标注报告已生成：{output_file}")
+
+
+# 对比两个文件夹中的文件
+def compare_folders(folder1, folder2, result_folder):
+    files1 = os.listdir(folder1)
+    files2 = os.listdir(folder2)
+    common_files = set(files1) & set(files2)
+
+    if not os.path.exists(result_folder):
+        os.makedirs(result_folder)
+
+    for filename in common_files:
+        file1 = os.path.join(folder1, filename)
+        file2 = os.path.join(folder2, filename)
+
+        basename = os.path.splitext(filename)[0]
+
+        output_file = os.path.join(result_folder, f"comparison_{basename}_result.html")
+        mark_differences(file1, file2, output_file)
+
+
+# 在这里生成总结报告
+def generate_summary_report(result_folder):
+    # 获取生成的所有差异报告
+    result_files = os.listdir(result_folder)
+    result_html_files = [f for f in result_files if f.endswith("_result.html")]
+
+    summary_data = []
+    for result_file in result_html_files:
+        file_path = os.path.join(result_folder, result_file)
+        summary_data.append([result_file, f'<a href="{file_path}">查看差异</a>'])
+
+    # 转换为DataFrame
+    summary_df = pd.DataFrame(summary_data, columns=["File Name", "Comparison Result"])
+
+    # 将总结报告导出为HTML
+    summary_html = summary_df.to_html(escape=False)
+    with open(os.path.join(result_folder, "summary_report.html"), "w", encoding="utf-8") as f:
+        f.write(summary_html)
+    print(f"总结报告已生成：summary_report.html")
+
+
+# 主程序
+if __name__ == "__main__":
+    folder1 = 'CDARS'
+    folder2 = 'SIGMA'
+    result_folder = 'RESULT_Complex'
+
+    compare_folders(folder1, folder2, result_folder)
+    generate_summary_report(result_folder)
