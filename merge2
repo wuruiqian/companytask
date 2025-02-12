@@ -1,0 +1,164 @@
+import difflib
+import os
+from itertools import zip_longest
+from bs4 import BeautifulSoup
+import pandas as pd
+import matplotlib.pyplot as plt
+from io import BytesIO
+import base64
+
+# 读取 HTML 文件
+def read_html(filename):
+    try:
+        with open(filename, 'r', encoding='windows-1252') as f:
+            return f.read()
+    except FileNotFoundError:
+        print(f"错误：找不到 '{filename}'")
+        return None
+
+# 获取 HTML 表格内容
+def extract_table_from_html(file_path):
+    html_content = read_html(file_path)
+    if not html_content:
+        return None
+
+    soup = BeautifulSoup(html_content, "html.parser")
+    table = soup.find("table")
+    
+    if not table:
+        return None
+
+    data = []
+    for row in table.find_all("tr"):
+        cols = row.find_all(["td", "th"])
+        row_data = [col.get_text(strip=True) for col in cols]
+        if any(row_data):  # 过滤空行
+            data.append(row_data)
+
+    return pd.DataFrame(data)
+
+# 对比 HTML 文件的表格内容
+def mark_differences(file1, file2, output_file):
+    df1 = extract_table_from_html(file1)
+    df2 = extract_table_from_html(file2)
+
+    if df1 is None or df2 is None:
+        print(f"警告：无法解析 {file1} 或 {file2}")
+        return
+
+    html_output = "<html><body><h2>Comparison Results</h2><table border='1'>"
+
+    # 生成表头
+    html_output += "<tr>" + "".join(f"<th>{col}</th>" for col in df1.columns) + "</tr>"
+
+    # 对比行
+    for row1, row2 in zip_longest(df1.values, df2.values, fillvalue=[""] * len(df1.columns)):
+        html_output += "<tr>" + "".join(f"<td style='background-color: lightgreen'>{v1}</td>" if v1 != v2 else f"<td>{v1}</td>"
+                                        for v1, v2 in zip(row1, row2)) + "</tr>"
+
+    html_output += "</table></body></html>"
+
+    # 保存 HTML 差异报告
+    with open(output_file, "w", encoding="utf-8") as file:
+        file.write(html_output)
+    print(f"差异标注报告已生成：{output_file}")
+
+# 比较 `CDARS` 和 `SIGMA` 文件夹中的文件
+def compare_files_in_folders(folder1, folder2, result_folder):
+    if not os.path.exists(result_folder):
+        os.makedirs(result_folder)
+
+    summary_data = []
+    
+    files1 = set(os.listdir(folder1))
+    files2 = set(os.listdir(folder2))
+    common_files = files1 & files2  # 共同文件
+    missing_in_cdars = files2 - files1  # `SIGMA` 存在但 `CDARS` 缺失的文件
+    missing_in_sigma = files1 - files2  # `CDARS` 存在但 `SIGMA` 缺失的文件
+
+    for filename in common_files:
+        file1 = os.path.join(folder1, filename)
+        file2 = os.path.join(folder2, filename)
+
+        comparison_filename = f"comparison_{filename.replace('.html', '_result.html')}"
+        comparison_result_file = os.path.join(result_folder, comparison_filename)
+
+        mark_differences(file1, file2, comparison_result_file)
+
+        summary_data.append([filename, "Not Matched", f'<a href="{comparison_result_file}">查看差异</a>'])
+
+    for filename in missing_in_cdars:
+        summary_data.append([filename, "缺失于 CDARS", "-"])
+
+    for filename in missing_in_sigma:
+        summary_data.append([filename, "缺失于 SIGMA", "-"])
+
+    summary_df = pd.DataFrame(summary_data, columns=["文件名", "比较结果", "详细报告"])
+    summary_df.to_csv(os.path.join(result_folder, "summary_report.csv"), index=False, encoding="utf-8")
+    return summary_df
+
+# 生成饼图
+def generate_pie_chart_base64(summary_df):
+    status_counts = summary_df['比较结果'].value_counts()
+    labels = status_counts.index
+    sizes = status_counts.values
+
+    fig, ax = plt.subplots(figsize=(6, 6))
+    ax.pie(sizes, labels=labels, autopct='%1.1f%%', startangle=140, colors=['#4CAF50', '#FF9800', '#F44336'])
+    ax.set_title("文件比较结果")
+
+    buf = BytesIO()
+    plt.savefig(buf, format="png", bbox_inches="tight")
+    plt.close(fig)
+    buf.seek(0)
+    return f"data:image/png;base64,{base64.b64encode(buf.read()).decode('utf-8')}"
+
+# 生成最终 HTML 报告
+def generate_summary_html(summary_df, result_folder, output_path):
+    pie_chart_img = generate_pie_chart_base64(summary_df)
+    summary_table_html = summary_df.to_html(index=False, escape=False, classes="table table-bordered")
+
+    html_content = f"""
+    <!DOCTYPE html>
+    <html lang="zh">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>文件比较报告</title>
+        <style>
+            body {{ font-family: Arial, sans-serif; margin: 20px; }}
+            .table {{ width: 100%; border-collapse: collapse; margin-top: 20px; font-size: 10pt; }}
+            .table th, .table td {{ border: 1px solid #ddd; padding: 8px; text-align: left; }}
+            .table th {{ background-color: #4CAF50; color: white; }}
+            img {{ width: 100%; max-width: 600px; height: auto; }}
+        </style>
+    </head>
+    <body>
+        <h2>文件比较报告</h2>
+        
+        <div>
+            <h3>比较结果饼图</h3>
+            <img src="{pie_chart_img}" alt="Pie Chart">
+        </div>
+
+        <div>
+            <h3>文件比较详情</h3>
+            {summary_table_html}
+        </div>
+    </body>
+    </html>
+    """
+
+    with open(output_path, "w", encoding="utf-8") as file:
+        file.write(html_content)
+    print(f"报告已生成: {output_path}")
+
+# 主程序
+if __name__ == "__main__":
+    folder1 = r"C:\Users\yuk13\OneDrive - Pfizer\Documents\Documents\CDARS\SIGMA\C3421010\tables\CDARS"
+    folder2 = r"C:\Users\yuk13\OneDrive - Pfizer\Documents\Documents\CDARS\SIGMA\C3421010\tables\SIGMA"
+    result_folder = r"C:\Users\yuk13\OneDrive - Pfizer\Documents\Documents\CDARS\SIGMA\C3421010\tables\RESULT_Complex"
+    summary_output_html = os.path.join(result_folder, "final_summary_report.html")
+
+    summary_df = compare_files_in_folders(folder1, folder2, result_folder)
+    generate_summary_html(summary_df, result_folder, summary_output_html)
