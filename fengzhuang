@@ -1,0 +1,130 @@
+import difflib
+from bs4 import BeautifulSoup
+from itertools import zip_longest
+
+class HtmlComparer:
+    def __init__(self, file1, file2, output_file='diff.html'):
+        self.file1 = file1
+        self.file2 = file2
+        self.output_file = output_file
+
+    def read_html(self, filename):
+        try:
+            with open(filename, 'r', encoding='windows-1252') as f:
+                return f.read()
+        except FileNotFoundError:
+            print(f"wrong,can't find '{filename}' ")
+            exit(1)
+
+    def normalize_text(self, text):
+        # 忽略文本中的多余空白符，避免换行符干扰对比
+        return " ".join(text.split())
+
+    def get_text(self, tag):
+        if tag:
+            return self.normalize_text(tag.get_text())
+        return ""
+
+    def highlight_text_diff(self, old_text, new_text, other_text=None):
+        differ = difflib.SequenceMatcher(None, old_text, new_text)
+        result = []
+        for tag, i1, i2, j1, j2 in differ.get_opcodes():
+            if tag == 'equal':
+                result.append(old_text[i1:i2])
+            elif tag in ('replace', 'delete'):
+                result.append(f'<span class="diff_sub">{old_text[i1:i2]}</span>')
+            elif tag == 'insert':
+                result.append(f'<span class="diff_add"></span>')
+        if other_text:
+            result.append(f'<span class="other_text">{other_text}</span>')
+        return ''.join(result)
+
+    def unify_th_to_td(self, table):
+        for th in table.find_all("th"):
+            th.name = "td"
+
+    def skip_empty_row(self, row):
+        return not any(td.get_text(strip=True) for td in row.find_all("td"))
+
+    def compare_tables(self, soup1, soup2):
+        tables1 = soup1.find_all("table")
+        tables2 = soup2.find_all("table")
+        for table1, table2 in zip(tables1, tables2):
+            self.unify_th_to_td(table1)
+            self.unify_th_to_td(table2)
+
+            body1 = table1.find("tbody") or table1
+            body2 = table2.find("tbody") or table2
+
+            rows1 = body1.find_all("tr")
+            rows2 = body2.find_all("tr")
+
+            rows1 = [row for row in rows1 if not self.skip_empty_row(row)]
+            rows2 = [row for row in rows2 if not self.skip_empty_row(row)]
+
+            max_rows = max(len(rows1), len(rows2))
+
+            for row1, row2 in zip_longest(rows1, rows2, fillvalue=None):
+                if not row1 or not row2:
+                    continue
+
+                cols1 = row1.find_all("td") if row1 else []
+                cols2 = row2.find_all("td") if row2 else []
+
+                max_cols = max(len(cols1), len(cols2))
+
+                cols1 = cols1 + [None] * (max_cols - len(cols1))
+                cols2 = cols2 + [None] * (max_cols - len(cols2))
+
+                for col1, col2 in zip(cols1, cols2):
+                    text1 = self.get_text(col1) if col1 else ""
+                    text2 = self.get_text(col2) if col2 else ""
+
+                    if text1 != text2:
+                        other_text = self.get_text(col2) if col2 else ""
+                        diff_html = self.highlight_text_diff(text1, text2, other_text)
+                        if col1:
+                            col1.clear()
+                            col1.append(BeautifulSoup(diff_html, "html.parser"))
+
+    def generate_html_report(self, soup1):
+        styled_content = f"""
+        <html>
+        <head>
+            <meta charset="utf-8">
+            <title>HTML Compare Result</title>
+            <style>
+                body {{
+                    font-family: Arial, sans-serif;
+                    margin: 20px;
+                }}
+                .diff_sub {{
+                    background-color: #ffb6ba; 
+                    color: red;
+                    text-decoration: line-through;
+                }}
+                .other_text {{
+                    color: blue;
+                }}
+            </style>
+        </head>
+        <body>
+            <h2>红色标注表示text in cdars</h2>
+            {str(soup1)}
+        </body>
+        </html>
+        """
+        with open(self.output_file, 'w', encoding='utf-8') as f:
+            f.write(styled_content)
+
+    def compare(self):
+        html1 = self.read_html(self.file1)
+        html2 = self.read_html(self.file2)
+
+        soup1 = BeautifulSoup(html1, "html.parser")
+        soup2 = BeautifulSoup(html2, "html.parser")
+
+        self.compare_tables(soup1, soup2)
+        self.generate_html_report(soup1)
+
+        print(f"Difference Reports Generated: {self.output_file}")
